@@ -9,6 +9,7 @@
 #include <thread>
 #include <type_traits>
 
+#include <mpm/partiallock.h>
 
 #ifndef MPM_LEFTRIGHT_CACHE_LINE_SIZE
 #   define MPM_LEFTRIGHT_CACHE_LINE_SIZE 64
@@ -174,6 +175,7 @@ namespace mpm
         T m_left alignas(MPM_LEFTRIGHT_CACHE_LINE_SIZE);
         T m_right alignas(MPM_LEFTRIGHT_CACHE_LINE_SIZE);
         std::mutex m_writemutex;
+        pl::PartialLock partial_lock;
     };
 
 
@@ -287,17 +289,60 @@ namespace mpm
     basic_leftright<T, R>::modify(F f)
     {
         static_assert(noexcept(f(std::declval<T&>())), "Modify functor must be noexcept");
-        std::unique_lock<std::mutex> xlock(m_writemutex);
+
+        bool partial_path = false;
+        pl::PartialLock::LockType lt = partial_lock.lock();
 
         auto lr = m_leftright.load(std::memory_order_relaxed);
         T t = lr == read_left ? m_right : m_left;
-        f(t);
+        f(t); //1st modification
 
-        m_leftright.store(lr == read_left ? read_right : read_left, std::memory_order_seq_cst);
-        toggle_reader_registry(xlock);
+        const std::size_t current = m_registry_index.load(std::memory_order_acquire);
+        const std::size_t next = (current + 1) & 0x1;
+
+        if(lt == pl::PartialLock::LockType::FULL)
+        { //We have full access to the lock
+            if(!m_reader_registries[next].empty() &&
+                partial_lock.writers_in_flight())
+            { //We have to wait for readers that published the other version, let waiting write progress.
+                partial_path = true;
+                partial_lock.unlock_partial();
+                partial_lock.wait_for_partial();
+            }
+
+            m_leftright.store(lr == read_left ? read_right : read_left, std::memory_order_seq_cst);
+    
+            while(!m_reader_registries[next].empty())
+            {
+                std::this_thread::yield();
+            }
+
+            m_registry_index.store(next, std::memory_order_release);
+
+            while(!m_reader_registries[current].empty())
+            {
+                std::this_thread::yield();
+            }
+        }
+        else // lockState = PARTIAL
+        { 
+            partial_lock.unlock_partial();
+            partial_lock.wait_for_partial();
+        }
+
+        //toggle_reader_registry(partial_lock);
 
         t = lr == read_right ? m_right : m_left;
-        return f(t);
+        f(t); //2nd modification
+
+        if(lt == pl::PartialLock::LockType::FULL && !partial_path)
+        {
+            partial_lock.unlock_full();
+        }
+        else
+        {
+            partial_lock.unlock_partial();
+        }
     }
 
 
@@ -306,7 +351,7 @@ namespace mpm
     void
     basic_leftright<T, R>::toggle_reader_registry(Lock& l) noexcept
     {
-        assert(l);
+        //assert(l);
         const std::size_t current =
             m_registry_index.load(std::memory_order_acquire);
         const std::size_t next = (current + 1) & 0x1;
