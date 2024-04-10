@@ -15,6 +15,7 @@ target_include_directories(leftright INTERFACE
 
 include(CTest)
 add_subdirectory(test)
+add_subdirectory(eval)
 
 include(FindDoxygen)
 if(DOXYGEN_FOUND)
