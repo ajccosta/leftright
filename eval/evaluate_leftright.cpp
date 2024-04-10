@@ -44,7 +44,6 @@ main(int argc, char * argv[])
     int opt;
 
     int num_readers = 10;
-    int num_read_ops = 1000000;
     int num_writers = 4;
     int num_write_ops = 10000;
 
@@ -59,9 +58,6 @@ main(int argc, char * argv[])
 			case 'l':
 				num_write_ops = atoi(optarg);
 				break;
-			case 'k':
-				num_read_ops = atoi(optarg);
-				break;
 	  		default:
 				break;
 		}
@@ -70,26 +66,18 @@ main(int argc, char * argv[])
     lrmap* lrm = new lrmap;
 
 
-    std::vector<std::thread> threads;
+    std::vector<std::thread> reader_threads;
+    std::vector<std::thread> writer_threads;
+    bool readers_finish = false;
+    bool *readers_finish_ref = &readers_finish;
 
-    num_read_ops = num_readers > 0 ? num_read_ops / num_readers : 0;
     num_write_ops = num_writers > 0 ? num_write_ops / num_writers : 0;
 
     const auto start{std::chrono::steady_clock::now()};
-    for(int i = 0; i < num_readers; i++)
-    { //Writers
-        threads.push_back(std::thread([lrm, num_read_ops]{
-            int key = 0;
-            for(int i = 0; i < num_read_ops; i++)
-            { 
-                read(*lrm, key);
-            }
-        }));
-    }
 
     for(int i = 0; i < num_writers; i++)
     { //Readers
-        threads.push_back(std::thread([lrm, num_write_ops]{
+        writer_threads.push_back(std::thread([lrm, num_write_ops]{
             int key = 0;
             int val = 10;
             for(int i = 0; i < num_write_ops; i++)
@@ -99,10 +87,22 @@ main(int argc, char * argv[])
         }));
     }
 
-    for(auto &t: threads)
-    {
-        t.join();
+    for(int i = 0; i < num_readers; i++)
+    { //Writers
+        reader_threads.push_back(std::thread([lrm, readers_finish_ref]{
+            int key = 0;
+            while(!*readers_finish_ref)
+            { 
+                read(*lrm, key);
+                std::this_thread::yield();
+            }
+        }));
     }
+
+    for(auto &t: writer_threads) { t.join(); }
+    readers_finish = true;
+    for(auto &t: reader_threads) { t.join(); }
+
     const auto end{std::chrono::steady_clock::now()};
 
     const std::chrono::duration<double> elapsed_seconds = end - start;
