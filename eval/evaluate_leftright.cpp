@@ -10,10 +10,14 @@
 #include <stdlib.h>
 #include <unistd.h>
 
+#define NUM_READER_REGISTERS 4
+
 //Avoid having to type the name of the map every time
 using lrkey = int;
 using lrval = int;
-using lrmap = mpm::leftright<std::map<lrkey, lrval>>;
+using lrmap = mpm::basic_leftright<std::map<lrkey, lrval>, mpm::distributed_atomic_reader_registry<NUM_READER_REGISTERS>>;
+//using lrmap = mpm::leftright<std::map<lrkey, lrval>>;
+
 
 void
 write(lrmap &lrm, lrkey key, lrval val)
@@ -23,6 +27,7 @@ write(lrmap &lrm, lrkey key, lrval val)
     });
 }
 
+
 lrval
 read(lrmap &lrm, lrkey key)
 {
@@ -31,6 +36,7 @@ read(lrmap &lrm, lrkey key)
     });
     return value;
 }
+
 
 int
 main(int argc, char * argv[])
