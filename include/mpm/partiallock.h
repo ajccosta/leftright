@@ -1,17 +1,11 @@
 #include <atomic>
 #include <cassert>
 
-//Currently, this doesn't work because there is no mutual exclusion.
-//  A Full thread may enter, then it lets a partial thread enter and
-//  after they both partially unlocked, ANOTHER partial can enter vi-
-//  -olating mutual exclusion
-
-//Find out better way to implement this
+//TODO: Find out better way to implement this
 thread_local uint64_t my_turn;
 
 namespace pl
 {
-
     class PartialLock
     {
         private:
@@ -47,15 +41,22 @@ namespace pl
             } 
     
     	    void
-            unlock_partial()
+            unlock_partial(LockType lt)
             {
-                turn.fetch_add(1, std::memory_order_seq_cst);
+                if(lt == LockType::FULL)
+                {
+                    turn.fetch_add(1, std::memory_order_seq_cst);
+                }
+                else
+                {
+                    turn.fetch_sub(1, std::memory_order_seq_cst);
+                }
             }
     
             void
             wait_for_partial()
             {
-                while(turn.load(std::memory_order_seq_cst) - 2 != my_turn)
+                while(turn.load(std::memory_order_seq_cst) != my_turn)
                 {
                     std::this_thread::yield();
                 }
@@ -64,7 +65,7 @@ namespace pl
             void
             wait_for_full()
             {
-                while(turn.load(std::memory_order_seq_cst) - 1 != my_turn)
+                while(turn.load(std::memory_order_seq_cst) != my_turn)
                 {
                     std::this_thread::yield();
                 }

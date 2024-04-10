@@ -306,7 +306,7 @@ namespace mpm
                 partial_lock.writers_in_flight())
             { //We have to wait for readers that published the other version, let waiting write progress.
                 partial_path = true;
-                partial_lock.unlock_partial();
+                partial_lock.unlock_partial(lt);
                 partial_lock.wait_for_partial();
             }
 
@@ -326,23 +326,14 @@ namespace mpm
         }
         else // lockState = PARTIAL
         { 
-            partial_lock.unlock_partial();
+            partial_lock.unlock_partial(lt);
             partial_lock.wait_for_full();
         }
-
-        //toggle_reader_registry(partial_lock);
 
         t = lr == read_right ? m_right : m_left;
         f(t); //2nd modification
 
-        if(lt == pl::PartialLock::LockType::FULL && !partial_path)
-        {
-            partial_lock.unlock_full();
-        }
-        else
-        {
-            partial_lock.unlock_partial();
-        }
+        partial_lock.unlock_full();
     }
 
 
