@@ -327,7 +327,7 @@ namespace mpm
         else // lockState = PARTIAL
         { 
             partial_lock.unlock_partial();
-            partial_lock.wait_for_partial();
+            partial_lock.wait_for_full();
         }
 
         //toggle_reader_registry(partial_lock);

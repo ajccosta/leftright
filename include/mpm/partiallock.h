@@ -1,6 +1,11 @@
 #include <atomic>
 #include <cassert>
 
+//Currently, this doesn't work because there is no mutual exclusion.
+//  A Full thread may enter, then it lets a partial thread enter and
+//  after they both partially unlocked, ANOTHER partial can enter vi-
+//  -olating mutual exclusion
+
 //Find out better way to implement this
 thread_local uint64_t my_turn;
 
@@ -27,10 +32,11 @@ namespace pl
             lock()
             {
                 my_turn = ticket.fetch_add(2, std::memory_order_seq_cst);
-                uint64_t t;
-                do {
-                     t = turn.load(std::memory_order_seq_cst);
-                } while(t != my_turn && (t + 1) != my_turn);
+                uint64_t t = turn.load(std::memory_order_seq_cst);
+                while(t != my_turn && (t + 1) != my_turn) {
+                    std::this_thread::yield();
+                    t = turn.load(std::memory_order_seq_cst);
+                }
                 return t == my_turn ? LockType::FULL : LockType::PARTIAL;
             } 
     
@@ -49,7 +55,16 @@ namespace pl
             void
             wait_for_partial()
             {
-                while(turn.load(std::memory_order_seq_cst) != my_turn)
+                while(turn.load(std::memory_order_seq_cst) - 2 != my_turn)
+                {
+                    std::this_thread::yield();
+                }
+            }
+
+            void
+            wait_for_full()
+            {
+                while(turn.load(std::memory_order_seq_cst) - 1 != my_turn)
                 {
                     std::this_thread::yield();
                 }
@@ -58,7 +73,7 @@ namespace pl
             bool
             writers_in_flight()
             {
-                return ticket.load(std::memory_order_seq_cst) > my_turn;
+                return ticket.load(std::memory_order_seq_cst) > my_turn + 2;
             }
     
             bool
