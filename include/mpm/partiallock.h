@@ -17,10 +17,10 @@ namespace pl
             PartialLock() = default;
             ~PartialLock();
     
-            enum LockType
+            enum class LockType
             {
-               FULL = 1,
-               PARTIAL,
+                FULL = 1,
+                PARTIAL,
             };
     
     	    LockType
@@ -31,7 +31,7 @@ namespace pl
                 do {
                      t = turn.load(std::memory_order_seq_cst);
                 } while(t != my_turn && (t + 1) != my_turn);
-                return t == my_turn ? FULL : PARTIAL;
+                return t == my_turn ? LockType::FULL : LockType::PARTIAL;
             } 
     
     	    void
@@ -47,7 +47,7 @@ namespace pl
             }
     
             void
-            waitfor_partial()
+            wait_for_partial()
             {
                 while(turn.load(std::memory_order_seq_cst) != my_turn)
                 {
