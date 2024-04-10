@@ -288,20 +288,16 @@ namespace mpm
     {
         static_assert(noexcept(f(std::declval<T&>())), "Modify functor must be noexcept");
         std::unique_lock<std::mutex> xlock(m_writemutex);
-        if(read_left == m_leftright.load(std::memory_order_relaxed))
-        {
-            f(m_right);
-            m_leftright.store(read_right, std::memory_order_seq_cst);
-            toggle_reader_registry(xlock);
-            return f(m_left);
-        }
-        else
-        {
-            f(m_left);
-            m_leftright.store(read_left, std::memory_order_seq_cst);
-            toggle_reader_registry(xlock);
-            return f(m_right);
-        }
+
+        auto lr = m_leftright.load(std::memory_order_relaxed);
+        T t = lr == read_left ? m_right : m_left;
+        f(t);
+
+        m_leftright.store(lr == read_left ? read_right : read_left, std::memory_order_seq_cst);
+        toggle_reader_registry(xlock);
+
+        t = lr == read_right ? m_right : m_left;
+        return f(t);
     }
 
 
