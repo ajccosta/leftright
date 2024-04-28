@@ -290,7 +290,6 @@ namespace mpm
     {
         static_assert(noexcept(f(std::declval<T&>())), "Modify functor must be noexcept");
 
-        bool partial_path = false;
         pl::PartialLock::LockType lt = partial_lock.lock();
 
         auto lr = m_leftright.load(std::memory_order_relaxed);
@@ -305,9 +304,7 @@ namespace mpm
             if(!m_reader_registries[next].empty() &&
                 partial_lock.writers_in_flight())
             { //We have to wait for readers that published the other version, let waiting write progress.
-                partial_path = true;
                 partial_lock.unlock_partial(lt);
-                partial_lock.wait_for_partial();
             }
 
             m_leftright.store(lr == read_left ? read_right : read_left, std::memory_order_seq_cst);
@@ -327,7 +324,6 @@ namespace mpm
         else // lockState = PARTIAL
         { 
             partial_lock.unlock_partial(lt);
-            partial_lock.wait_for_full();
         }
 
         t = lr == read_right ? m_right : m_left;

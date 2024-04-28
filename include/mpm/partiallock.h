@@ -42,6 +42,9 @@ namespace pl
     
     	    void
             unlock_partial(LockType lt)
+            //Gives control to other thread waiting for lock
+            //  soft pre-requisite: some other thread is waiting to acquire this lock,
+            //  otherwise this might block indefinetly.
             {
                 if(lt == LockType::FULL)
                 {
@@ -51,11 +54,8 @@ namespace pl
                 {
                     turn.fetch_sub(1, std::memory_order_seq_cst);
                 }
-            }
-    
-            void
-            wait_for_partial()
-            {
+
+                //We must now wait for the other thread to give us back control
                 while(turn.load(std::memory_order_seq_cst) != my_turn)
                 {
                     std::this_thread::yield();
