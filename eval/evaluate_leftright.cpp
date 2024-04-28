@@ -1,6 +1,4 @@
 #include <iostream>
-//#include <mpm/2writer_leftright.h>
-#include <mpm/leftright.h>
 #include <atomic>
 #include <map>
 #include <vector>
@@ -10,6 +8,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+
+//#include <mpm/2writer_leftright.h>
+#include <mpm/leftright.h>
+#include "wyhash.h"
 
 #define NUM_READER_REGISTERS 4
 
@@ -48,8 +50,9 @@ main(int argc, char * argv[])
     int num_writers = 4;
     bool silent = false;
     std::chrono::duration<double> time = std::chrono::duration<double>(5); //number of seconds to run experiment for
+    int keyspace_size = 10000;
 
-    while((opt = getopt(argc, argv, "w:r:st:")) != -1) {
+    while((opt = getopt(argc, argv, "w:r:st:k:")) != -1) {
 		switch(opt) {
 			case 'w':
 				num_writers = atoi(optarg);
@@ -62,6 +65,9 @@ main(int argc, char * argv[])
 				break;
 			case 't':
                 time = std::chrono::duration<double>(atof(optarg));
+				break;
+			case 'k':
+                keyspace_size = atoi(optarg);
 				break;
 	  		default:
 				break;
@@ -85,14 +91,16 @@ main(int argc, char * argv[])
 
     for(int i = 0; i < num_writers; i++)
     { //Readers
-        threads.push_back(std::thread([lrm, finish_ref, num_write_ops_ref]{
+        threads.push_back(std::thread([lrm, finish_ref, num_write_ops_ref, i, keyspace_size]{
             while(!*finish_ref)
             {
                 uint32_t num_write_ops_t = 0;
-                int key = 0;
-                int val = 10;
+                uint64_t seed = i;
+
                 while(!*finish_ref)
                 {
+                    int key = HASH(&seed) % keyspace_size;
+                    int val = HASH(&seed) % keyspace_size;
                     write(*lrm, key, val);
                     num_write_ops_t++;
                 }
@@ -103,11 +111,13 @@ main(int argc, char * argv[])
 
     for(int i = 0; i < num_readers; i++)
     { //Writers
-        threads.push_back(std::thread([lrm, finish_ref, num_read_ops_ref]{
+        threads.push_back(std::thread([lrm, finish_ref, num_read_ops_ref, i, keyspace_size]{
             uint32_t num_read_ops_t = 0;
-            int key = 0;
+            uint64_t seed = i;
+
             while(!*finish_ref)
             { 
+                int key = HASH(&seed) % keyspace_size;
                 read(*lrm, key);
                 num_read_ops_t++;
             }
@@ -128,11 +138,18 @@ main(int argc, char * argv[])
     for(auto &t: threads) { t.join(); }
 
 
-    std::cout << "Number of read operations: " << num_read_ops << '\n'
-        << "Number of write operations: " << num_write_ops << '\n'
-        << "Total number of operations: " << num_read_ops + num_write_ops << '\n'
-        << "Throughput: " << double (num_read_ops + num_write_ops) / elapsed_seconds.count() << " op / s" << '\n'
-        << "Time elapsed: " << elapsed_seconds.count() << '\n';
+    if(!silent)
+    {
+        std::cout << std::fixed << "Number of read operations: " << num_read_ops << '\n'
+            << "Number of write operations: " << num_write_ops << '\n'
+            << "Total number of operations: " << num_read_ops + num_write_ops << '\n'
+            << "Throughput: " << double (num_read_ops + num_write_ops) / elapsed_seconds.count() << " op / s" << '\n'
+            << "Time elapsed: " << elapsed_seconds.count() << '\n';
+    }
+    else
+    {
+        std::cout << std::fixed << double (num_read_ops + num_write_ops) / elapsed_seconds.count() << '\n';
+    }
 
     return 0;
 }
