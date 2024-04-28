@@ -1,4 +1,5 @@
 #include <iostream>
+//#include <mpm/2writer_leftright.h>
 #include <mpm/leftright.h>
 #include <atomic>
 #include <map>
@@ -15,8 +16,8 @@
 //Avoid having to type the name of the map every time
 using lrkey = int;
 using lrval = int;
-using lrmap = mpm::basic_leftright<std::map<lrkey, lrval>, mpm::distributed_atomic_reader_registry<NUM_READER_REGISTERS>>;
-//using lrmap = mpm::leftright<std::map<lrkey, lrval>>;
+//using lrmap = mpm::basic_leftright<std::map<lrkey, lrval>, mpm::distributed_atomic_reader_registry<NUM_READER_REGISTERS>>;
+using lrmap = mpm::leftright<std::map<lrkey, lrval>>;
 
 
 void
@@ -45,9 +46,10 @@ main(int argc, char * argv[])
 
     int num_readers = 10;
     int num_writers = 4;
-    int num_write_ops = 10000;
+    bool silent = false;
+    std::chrono::duration<double> time = std::chrono::duration<double>(5); //number of seconds to run experiment for
 
-    while((opt = getopt(argc, argv, "w:r:l:k:")) != -1) {
+    while((opt = getopt(argc, argv, "w:r:st:")) != -1) {
 		switch(opt) {
 			case 'w':
 				num_writers = atoi(optarg);
@@ -55,8 +57,11 @@ main(int argc, char * argv[])
 			case 'r':
 				num_readers = atoi(optarg);
 				break;
-			case 'l':
-				num_write_ops = atoi(optarg);
+			case 's':
+				silent = true;
+				break;
+			case 't':
+                time = std::chrono::duration<double>(atof(optarg));
 				break;
 	  		default:
 				break;
@@ -66,47 +71,68 @@ main(int argc, char * argv[])
     lrmap* lrm = new lrmap;
 
 
-    std::vector<std::thread> reader_threads;
-    std::vector<std::thread> writer_threads;
-    bool readers_finish = false;
-    bool *readers_finish_ref = &readers_finish;
+    std::vector<std::thread> threads;
+    bool finish = false;
+    bool *finish_ref = &finish;
 
-    num_write_ops = num_writers > 0 ? num_write_ops / num_writers : 0;
+    std::atomic_uint_fast32_t num_read_ops {0};
+    std::atomic_uint_fast32_t* num_read_ops_ref = &num_read_ops;
+
+    std::atomic_uint_fast32_t num_write_ops {0};
+    std::atomic_uint_fast32_t* num_write_ops_ref = &num_write_ops;
 
     const auto start{std::chrono::steady_clock::now()};
 
     for(int i = 0; i < num_writers; i++)
     { //Readers
-        writer_threads.push_back(std::thread([lrm, num_write_ops]{
-            int key = 0;
-            int val = 10;
-            for(int i = 0; i < num_write_ops; i++)
+        threads.push_back(std::thread([lrm, finish_ref, num_write_ops_ref]{
+            while(!*finish_ref)
             {
-                write(*lrm, key, val);
+                uint32_t num_write_ops_t = 0;
+                int key = 0;
+                int val = 10;
+                while(!*finish_ref)
+                {
+                    write(*lrm, key, val);
+                    num_write_ops_t++;
+                }
+                (*num_write_ops_ref).fetch_add(num_write_ops_t);
             }
         }));
     }
 
     for(int i = 0; i < num_readers; i++)
     { //Writers
-        reader_threads.push_back(std::thread([lrm, readers_finish_ref]{
+        threads.push_back(std::thread([lrm, finish_ref, num_read_ops_ref]{
+            uint32_t num_read_ops_t = 0;
             int key = 0;
-            while(!*readers_finish_ref)
+            while(!*finish_ref)
             { 
                 read(*lrm, key);
-                std::this_thread::yield();
+                num_read_ops_t++;
             }
+            (*num_read_ops_ref).fetch_add(num_read_ops_t);
         }));
     }
 
-    for(auto &t: writer_threads) { t.join(); }
-    readers_finish = true;
-    for(auto &t: reader_threads) { t.join(); }
+    std::chrono::duration<double> elapsed_seconds;
+    auto end{std::chrono::steady_clock::now()};
 
-    const auto end{std::chrono::steady_clock::now()};
+    while((elapsed_seconds = end - start) < time)
+    {
+        std::this_thread::yield();
+        end = std::chrono::steady_clock::now();
+    }
 
-    const std::chrono::duration<double> elapsed_seconds = end - start;
-    std::cout << elapsed_seconds.count() << '\n';
+    finish = true;
+    for(auto &t: threads) { t.join(); }
+
+
+    std::cout << "Number of read operations: " << num_read_ops << '\n'
+        << "Number of write operations: " << num_write_ops << '\n'
+        << "Total number of operations: " << num_read_ops + num_write_ops << '\n'
+        << "Throughput: " << double (num_read_ops + num_write_ops) / elapsed_seconds.count() << " op / s" << '\n'
+        << "Time elapsed: " << elapsed_seconds.count() << '\n';
 
     return 0;
 }
