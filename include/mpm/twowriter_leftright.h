@@ -9,12 +9,13 @@
 #include <thread>
 #include <type_traits>
 
+#include <mpm/partiallock.h>
 
 #ifndef MPM_LEFTRIGHT_CACHE_LINE_SIZE
 #   define MPM_LEFTRIGHT_CACHE_LINE_SIZE 64
 #endif
 
-namespace mpm
+namespace twl //two writer leftright
 {
     //! \defgroup Concepts
     //! Concept is a term that describes a named set of requirements for a type.
@@ -60,7 +61,7 @@ namespace mpm
     //!   A. Correia and P. Ramalhete. Left-Right: A Concurrency Control
     //!   Technique with Wait-Free Population Oblivious Reads
     template <typename T, typename ReaderRegistry>
-    class basic_leftright
+    class twowriter_leftright
     {
         static_assert(noexcept(std::declval<ReaderRegistry>().arrive()),
                 "ReaderRegistry::arrive() must be noexcept");
@@ -74,25 +75,25 @@ namespace mpm
         using reference = value_type&;
         using const_reference = const value_type&;
 
-        basic_leftright() = default;
+        twowriter_leftright() = default;
 
         //! Construct the two underlying instances of T
         //! by moving a seed instance
-        basic_leftright(T&& seed)
+        twowriter_leftright(T&& seed)
             noexcept(std::is_nothrow_copy_constructible<T>::value
                     && std::is_nothrow_move_constructible<T>::value);
 
 
         //! Construct the two underlying instances of T
         //! by copying a seed instance
-        basic_leftright(const value_type& seed)
+        twowriter_leftright(const value_type& seed)
             noexcept(std::is_nothrow_copy_constructible<T>::value);
 
 
         //! Construct the two underlying instances of T in place, forwarding
         //! the args after the mpm::in_place tag
         template <typename... Args>
-        basic_leftright(in_place_t, Args&&...)
+        twowriter_leftright(in_place_t, Args&&...)
             noexcept(std::is_nothrow_copy_constructible<T>::value
                     && std::is_nothrow_constructible<T, Args...>::value);
 
@@ -102,11 +103,11 @@ namespace mpm
         //!  operations to the encapsulated instance, in which case the relevant
         //!  operation is accessed via modify()
 
-        basic_leftright(const basic_leftright& other)=delete;
-        basic_leftright(basic_leftright&& other)=delete;
-        basic_leftright& operator=(const basic_leftright& rhs)=delete;
-        basic_leftright& operator=(basic_leftright&& rhs)=delete;
-        void swap(basic_leftright& other) noexcept = delete;
+        twowriter_leftright(const twowriter_leftright& other)=delete;
+        twowriter_leftright(twowriter_leftright&& other)=delete;
+        twowriter_leftright& operator=(const twowriter_leftright& rhs)=delete;
+        twowriter_leftright& operator=(twowriter_leftright&& rhs)=delete;
+        void swap(twowriter_leftright& other) noexcept = delete;
 
 
         //! Modify the state of the managed datastructure
@@ -160,9 +161,6 @@ namespace mpm
             ReaderRegistry& m_reg;
         };
 
-        template <typename Lock>
-        void toggle_reader_registry(Lock& l) noexcept;
-
         enum lr { read_left, read_right };
 
         mutable std::array<ReaderRegistry, 2> m_reader_registries;
@@ -174,6 +172,7 @@ namespace mpm
         T m_left alignas(MPM_LEFTRIGHT_CACHE_LINE_SIZE);
         T m_right alignas(MPM_LEFTRIGHT_CACHE_LINE_SIZE);
         std::mutex m_writemutex;
+        pl::PartialLock partial_lock;
     };
 
 
@@ -232,13 +231,13 @@ namespace mpm
     //! Default leftright uses the simpler reader registry; prefer
     //! distributed_atomic_reader_registry when reads are highly contended
     template <typename T>
-    using leftright = basic_leftright<T, atomic_reader_registry>;
+    using leftright = twowriter_leftright<T, atomic_reader_registry>;
 
 
 #   ifndef DOCS
 
     template <typename T, typename R>
-    basic_leftright<T, R>::basic_leftright(T&& seed)
+    twowriter_leftright<T, R>::twowriter_leftright(T&& seed)
             noexcept(std::is_nothrow_copy_constructible<T>::value
                     && std::is_nothrow_move_constructible<T>::value)
         : m_left(std::move(seed))
@@ -248,7 +247,7 @@ namespace mpm
 
 
     template <typename T, typename R>
-    basic_leftright<T, R>::basic_leftright(const T& seed)
+    twowriter_leftright<T, R>::twowriter_leftright(const T& seed)
         noexcept(std::is_nothrow_copy_constructible<T>::value)
         : m_left(seed)
         , m_right(seed)
@@ -258,7 +257,7 @@ namespace mpm
 
     template <typename T, typename R>
     template <typename... Args>
-    basic_leftright<T, R>::basic_leftright(in_place_t, Args&&... args)
+    twowriter_leftright<T, R>::twowriter_leftright(in_place_t, Args&&... args)
             noexcept(std::is_nothrow_copy_constructible<T>::value
                     && std::is_nothrow_constructible<T, Args...>::value)
         : m_left(std::forward<Args>(args)...)
@@ -270,7 +269,7 @@ namespace mpm
     template <typename T, typename R>
     template <typename F>
     typename std::result_of<F(const T&)>::type
-    basic_leftright<T, R>::observe(F f) const
+    twowriter_leftright<T, R>::observe(F f) const
         noexcept(noexcept(f(std::declval<const T&>())))
     {
         std::size_t idx = m_registry_index.load(std::memory_order_acquire);
@@ -284,53 +283,55 @@ namespace mpm
     template <typename T, typename R>
     template <typename F>
     typename std::result_of<F(T&)>::type
-    basic_leftright<T, R>::modify(F f)
+    twowriter_leftright<T, R>::modify(F f)
     {
         static_assert(noexcept(f(std::declval<T&>())), "Modify functor must be noexcept");
-        std::unique_lock<std::mutex> xlock(m_writemutex);
-        if(read_left == m_leftright.load(std::memory_order_relaxed))
-        {
-            f(m_right);
-            m_leftright.store(read_right, std::memory_order_seq_cst);
-            toggle_reader_registry(xlock);
-            return f(m_left);
-        }
-        else
-        {
-            f(m_left);
-            m_leftright.store(read_left, std::memory_order_seq_cst);
-            toggle_reader_registry(xlock);
-            return f(m_right);
-        }
-    }
 
+        pl::PartialLock::LockType lt = partial_lock.lock();
 
-    template <typename T, typename R>
-    template <typename Lock>
-    void
-    basic_leftright<T, R>::toggle_reader_registry(Lock& l) noexcept
-    {
-        assert(l);
-        const std::size_t current =
-            m_registry_index.load(std::memory_order_acquire);
+        auto lr = m_leftright.load(std::memory_order_relaxed);
+        T t = lr == read_left ? m_right : m_left;
+        f(t); //1st modification
+
+        const std::size_t current = m_registry_index.load(std::memory_order_acquire);
         const std::size_t next = (current + 1) & 0x1;
 
-        while(!m_reader_registries[next].empty())
-        {
-            std::this_thread::yield();
+        if(lt == pl::PartialLock::LockType::FULL)
+        { //We have full access to the lock
+            if(!m_reader_registries[next].empty() &&
+                partial_lock.writers_in_flight())
+            { //We have to wait for readers that published the other version, let waiting write progress.
+                partial_lock.unlock_partial(lt);
+            }
+
+            m_leftright.store(lr == read_left ? read_right : read_left, std::memory_order_seq_cst);
+    
+            while(!m_reader_registries[next].empty())
+            {
+                std::this_thread::yield();
+            }
+
+            m_registry_index.store(next, std::memory_order_release);
+
+            while(!m_reader_registries[current].empty())
+            {
+                std::this_thread::yield();
+            }
+        }
+        else // lockState = PARTIAL
+        { 
+            partial_lock.unlock_partial(lt);
         }
 
-        m_registry_index.store(next, std::memory_order_release);
+        t = lr == read_right ? m_right : m_left;
+        f(t); //2nd modification
 
-        while(!m_reader_registries[current].empty())
-        {
-            std::this_thread::yield();
-        }
+        partial_lock.unlock_full();
     }
 
 
     template <typename T, typename R>
-    basic_leftright<T, R>::scoped_read_indication::scoped_read_indication(R& r) noexcept
+    twowriter_leftright<T, R>::scoped_read_indication::scoped_read_indication(R& r) noexcept
         : m_reg(r)
     {
         m_reg.arrive();
@@ -338,7 +339,7 @@ namespace mpm
 
 
     template <typename T, typename R>
-    basic_leftright<T, R>::scoped_read_indication::~scoped_read_indication() noexcept
+    twowriter_leftright<T, R>::scoped_read_indication::~scoped_read_indication() noexcept
     {
         m_reg.depart();
     }
