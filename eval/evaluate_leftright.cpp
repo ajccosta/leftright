@@ -1,6 +1,5 @@
 #include <iostream>
 #include <atomic>
-#include <map>
 #include <vector>
 #include <chrono>
 
@@ -9,37 +8,46 @@
 #include <stdlib.h>
 #include <unistd.h>
 
-//#include <mpm/2writer_leftright.h>
+
+#include <mpm/twowriter_leftright.h>
 #include <mpm/leftright.h>
-#include "wyhash.h"
+
+#include "utils/wyhash.h"
+
+#include "data-structures/map.h"
+//#include "data-structures/BSTNode.h"
+
 
 #define NUM_READER_REGISTERS 4
 
 //Avoid having to type the name of the map every time
-using lrkey = int;
-using lrval = int;
-//using lrmap = mpm::basic_leftright<std::map<lrkey, lrval>, mpm::distributed_atomic_reader_registry<NUM_READER_REGISTERS>>;
-using lrmap = mpm::leftright<std::map<lrkey, lrval>>;
+//using lri = mpm::basic_leftright<TYPE, mpm::distributed_atomic_reader_registry<NUM_READER_REGISTERS>>;
+using lri = mpm::leftright<TYPE>;
+
+//using lri = twl::twowriter_leftright<TYPE, twl::distributed_atomic_reader_registry<NUM_READER_REGISTERS>>;
+//using lri = twl::leftright<TYPE>;
 
 
+template <typename T, typename K, typename V>
 void
-write(lrmap &lrm, lrkey key, lrval val)
+write(T *d, K key, V val)
 {
-    lrm.modify([key, val](lrmap::reference map) noexcept {
-        map[key] = val;
+    d->modify([key, val](T::reference d) noexcept {
+        WRITE(d, key, val);
+        //std::cout << "Inserted " << WRITE(d, key, val) << std::endl;
     });
 }
 
 
-lrval
-read(lrmap &lrm, lrkey key)
+template <typename T, typename K>
+void
+read(T *d, K key)
 {
-    int value = lrm.observe([key](lrmap::const_reference map) {
-        return map.find(key)->second;
+    d->observe([key](T::const_reference d) noexcept {
+        READ(d, key);
+        //std::cout << "Found " << READ(d, key) << std::endl;
     });
-    return value;
 }
-
 
 int
 main(int argc, char * argv[])
@@ -74,7 +82,7 @@ main(int argc, char * argv[])
 		}
 	}
 
-    lrmap* lrm = new lrmap;
+    lri* lrm = new lri;
 
 
     std::vector<std::thread> threads;
@@ -91,7 +99,7 @@ main(int argc, char * argv[])
 
     for(int i = 0; i < num_writers; i++)
     { //Readers
-        threads.push_back(std::thread([lrm, finish_ref, num_write_ops_ref, i, keyspace_size]{
+        threads.push_back(std::thread([&lrm, finish_ref, num_write_ops_ref, i, keyspace_size]{
             while(!*finish_ref)
             {
                 uint32_t num_write_ops_t = 0;
@@ -100,8 +108,8 @@ main(int argc, char * argv[])
                 while(!*finish_ref)
                 {
                     int key = HASH(&seed) % keyspace_size;
-                    int val = HASH(&seed) % keyspace_size;
-                    write(*lrm, key, val);
+                    int val = HASH(&seed);
+                    write(lrm, key, val);
                     num_write_ops_t++;
                 }
                 (*num_write_ops_ref).fetch_add(num_write_ops_t);
@@ -111,14 +119,14 @@ main(int argc, char * argv[])
 
     for(int i = 0; i < num_readers; i++)
     { //Writers
-        threads.push_back(std::thread([lrm, finish_ref, num_read_ops_ref, i, keyspace_size]{
+        threads.push_back(std::thread([&lrm, finish_ref, num_read_ops_ref, i, keyspace_size]{
             uint32_t num_read_ops_t = 0;
             uint64_t seed = i;
 
             while(!*finish_ref)
             { 
                 int key = HASH(&seed) % keyspace_size;
-                read(*lrm, key);
+                read(lrm, key);
                 num_read_ops_t++;
             }
             (*num_read_ops_ref).fetch_add(num_read_ops_t);

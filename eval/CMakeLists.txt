@@ -11,7 +11,7 @@ foreach(fpath ${eval_srcs})
 endforeach()
 
 target_link_libraries(${eval_bin} leftright)
-set_target_properties(${eval_bin} PROPERTIES CXX_STANDARD 11)
+set_target_properties(${eval_bin} PROPERTIES CXX_STANDARD 20)
 target_include_directories(${eval_bin} SYSTEM PRIVATE "${PROJECT_SOURCE_DIR}/thirdparty/include")
 
 add_compile_options(-Wall -Wpedantic -Wextra -Werror)
