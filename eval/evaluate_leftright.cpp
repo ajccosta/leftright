@@ -13,6 +13,7 @@
 #include <mpm/leftright.h>
 
 #include "utils/wyhash.h"
+#include "utils/fake_work.hh"
 
 #include "data-structures/map.h"
 //#include "data-structures/BSTNode.h"
@@ -45,6 +46,7 @@ read(T *d, K key)
 {
     d->observe([key](T::const_reference d) noexcept {
         READ(d, key);
+        //FAKE_WORK(100);
         //std::cout << "Found " << READ(d, key) << std::endl;
     });
 }
